@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Lista Inteligente AI</title>
+    
+    <meta name="theme-color" content="#10b981">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3724/3724788.png">
+
+    <!-- Tailwind & Vue -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Marked para renderizar Markdown da IA se necessário -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <style>
+        body { -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .custom-checkbox:checked + div { background-color: #10b981; border-color: #10b981; }
+        .custom-checkbox:checked + div:after { content: '✔'; color: white; display: block; text-align: center; font-size: 14px; }
+        .spin-slow { animation: spin 3s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 h-screen flex flex-col overflow-hidden">
+
+    <div id="app" class="h-full flex flex-col max-w-md mx-auto w-full bg-white shadow-xl relative">
+        
+        <!-- HEADER -->
+        <header class="bg-emerald-700 p-4 shadow-md z-20 shrink-0">
+            <div class="flex justify-between items-center mb-3">
+                <h1 class="text-white font-bold text-lg flex items-center gap-2">
+                    <i class="fas fa-magic"></i> Lista AI
+                </h1>
+                <div class="flex gap-2">
+                    <!-- BOTÃO MÁGICO DE ORGANIZAR -->
+                    <button @click="organizeList" :disabled="isProcessing" 
+                        class="bg-white text-emerald-700 hover:bg-emerald-50 px-3 py-1 rounded-full text-xs font-bold shadow flex items-center gap-1 transition-all active:scale-95 disabled:opacity-50">
+                        <i :class="isProcessing ? 'fas fa-circle-notch fa-spin' : 'fas fa-sparkles'"></i>
+                        {{ isProcessing ? 'Pensando...' : 'Organizar' }}
+                    </button>
+                    <button @click="toggleSettings" class="text-emerald-100 hover:text-white px-2"><i class="fas fa-cog text-xl"></i></button>
+                </div>
+            </div>
+
+            <!-- INPUT AREA -->
+            <div class="relative">
+                <div class="flex bg-white rounded-lg shadow-inner items-center p-1 border-2 transition-colors" :class="inputRaw ? 'border-emerald-500' : 'border-transparent'">
+                    <input 
+                        ref="inputRef"
+                        v-model="inputRaw"
+                        @keydown.enter="quickAdd"
+                        type="text" 
+                        placeholder="Adicione itens (ex: 2kg Arroz)..." 
+                        class="w-full p-3 outline-none text-gray-700 font-medium bg-transparent text-base"
+                        autocomplete="off"
+                    >
+                    <button v-if="inputRaw" @click="quickAdd" class="bg-emerald-600 text-white rounded-md w-10 h-10 flex items-center justify-center mr-1 shadow hover:bg-emerald-700 active:scale-90 transition">
+                        <i class="fas fa-plus"></i>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- ÁREA DE COLAGEM RÁPIDA (BULK IMPORT) -->
+        <div v-if="showBulkImport" class="absolute inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm flex flex-col max-h-[80vh]">
+                <div class="p-4 border-b bg-gray-50 flex justify-between items-center">
+                    <h3 class="font-bold text-gray-700"><i class="fas fa-paste mr-2"></i>Colar Lista de Texto</h3>
+                    <button @click="showBulkImport = false" class="text-gray-400"><i class="fas fa-times"></i></button>
+                </div>
+                <textarea v-model="bulkText" placeholder="Cole sua lista aqui (um item por linha ou separado por vírgulas)..." class="flex-1 p-4 outline-none resize-none text-sm"></textarea>
+                <div class="p-3 border-t grid grid-cols-2 gap-2">
+                    <button @click="showBulkImport = false" class="py-2 text-gray-500 font-bold">Cancelar</button>
+                    <button @click="processBulkImport" class="py-2 bg-emerald-600 text-white rounded-lg font-bold shadow hover:bg-emerald-700">Importar</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- LISTA -->
+        <main class="flex-1 overflow-y-auto no-scrollbar p-2 pb-24 relative bg-gray-50">
+            
+            <!-- Estado Vazio -->
+            <div v-if="groupedList.length === 0" class="flex flex-col items-center justify-center h-full text-gray-400 opacity-60 px-6 text-center space-y-4">
+                <i class="fas fa-wand-magic-sparkles text-6xl text-emerald-200"></i>
+                <div>
+                    <p class="font-medium text-lg">Lista Vazia</p>
+                    <p class="text-xs">Digite itens acima ou cole uma lista inteira.</p>
+                </div>
+                <button @click="showBulkImport = true" class="text-emerald-600 border border-emerald-200 bg-white px-4 py-2 rounded-full text-sm font-bold shadow-sm hover:shadow-md transition">
+                    <i class="fas fa-paste mr-1"></i> Colar Lista do WhatsApp
+                </button>
+            </div>
+
+            <!-- Listagem -->
+            <transition-group name="list" tag="div">
+                <div v-for="group in groupedList" :key="group.categoryId" class="mb-5 bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200">
+                    <div :class="['px-4 py-2 text-sm font-bold uppercase tracking-wide text-white flex justify-between items-center shadow-sm', getCategoryColor(group.categoryId, true)]">
+                        <span class="flex items-center gap-2"><i :class="getCategoryIcon(group.categoryId)"></i> {{ group.categoryName }}</span>
+                        <span class="bg-black/20 px-2 py-0.5 rounded-full text-xs font-mono">{{ group.items.length }}</span>
+                    </div>
+
+                    <div v-for="item in group.items" :key="item.id" class="flex items-center p-3 border-b border-gray-100 last:border-0 relative hover:bg-gray-50 transition-colors group">
+                        <label class="relative flex items-center p-2 cursor-pointer tap-highlight-transparent">
+                            <input type="checkbox" :checked="item.checked" @change="toggleCheck(item)" class="custom-checkbox hidden">
+                            <div class="w-6 h-6 border-2 border-gray-300 rounded-md transition-all duration-200 shadow-sm"></div>
+                        </label>
+                        <div class="flex-1 ml-3 cursor-pointer" @click="editItem(item)">
+                            <div :class="{'line-through text-gray-400': item.checked, 'text-gray-800': !item.checked}" class="font-medium text-base leading-tight">
+                                {{ item.nome }}
+                            </div>
+                            <div v-if="item.quantidade" class="text-xs text-emerald-600 font-bold mt-0.5 inline-block bg-emerald-50 px-1.5 rounded">
+                                {{ item.quantidade }}
+                            </div>
+                        </div>
+                        <button @click="removeItem(item.id)" class="w-8 h-8 flex items-center justify-center text-gray-300 hover:text-red-500 transition-colors">
+                            <i class="fas fa-trash-alt"></i>
+                        </button>
+                    </div>
+                </div>
+            </transition-group>
+        </main>
+
+        <!-- MENU LATERAL / CONFIGURAÇÕES -->
+        <div v-if="showSettings" class="absolute inset-0 bg-white z-40 flex flex-col animate-fade-in">
+            <header class="bg-gray-800 text-white p-4 flex items-center justify-between">
+                <h2 class="font-bold"><i class="fas fa-robot mr-2"></i>Inteligência Artificial</h2>
+                <button @click="toggleSettings" class="text-white w-10 h-10"><i class="fas fa-times text-xl"></i></button>
+            </header>
+            
+            <div class="p-6 space-y-6 flex-1 overflow-y-auto">
+                
+                <!-- API KEY SECTION -->
+                <div class="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
+                    <h3 class="font-bold text-indigo-900 mb-2 flex items-center gap-2">
+                        <i class="fab fa-google"></i> Google Gemini API
+                    </h3>
+                    <p class="text-xs text-indigo-700 mb-3 leading-relaxed">
+                        Para uma organização perfeita de itens desconhecidos, use uma chave gratuita do Gemini Flash. Sem chave, o app usa o "Cérebro Local" (menos preciso para itens raros).
+                    </p>
+                    
+                    <div class="relative">
+                        <input v-model="geminiKey" type="password" placeholder="Cole sua API Key aqui..." class="w-full p-3 pr-10 rounded border border-indigo-200 text-sm focus:outline-indigo-500">
+                        <button v-if="geminiKey" @click="saveKey" class="absolute right-2 top-2 text-indigo-600 p-1 font-bold text-xs bg-indigo-100 rounded hover:bg-indigo-200">SALVAR</button>
+                    </div>
+                    <div class="mt-2 text-right">
+                        <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-[10px] text-indigo-500 underline font-bold">Obter Chave Grátis (Google AI Studio)</a>
+                    </div>
+                </div>
+
+                <!-- AÇÕES -->
+                <div class="space-y-3">
+                     <button @click="showBulkImport = true; showSettings = false" class="w-full bg-emerald-50 text-emerald-700 p-3 rounded-xl font-bold border border-emerald-100 flex items-center justify-center gap-2">
+                        <i class="fas fa-paste"></i> Colar Lista de Texto
+                    </button>
+
+                    <button @click="clearCompleted" class="w-full bg-red-50 text-red-600 p-3 rounded-xl font-bold border border-red-100 flex items-center justify-center gap-2">
+                        <i class="fas fa-broom"></i> Limpar Concluídos
+                    </button>
+                    
+                    <button @click="resetApp" class="w-full bg-gray-100 text-gray-500 p-3 rounded-xl font-bold text-xs">
+                        Resetar Tudo
+                    </button>
+                </div>
+            </div>
+            
+            <div class="p-3 bg-gray-50 text-center text-[10px] text-gray-400">
+                PWA Local + Gemini AI Integration
+            </div>
+        </div>
+
+        <!-- TOAST -->
+        <div v-if="toastMessage" class="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white px-5 py-3 rounded-full shadow-2xl text-xs font-bold z-50 transition opacity flex items-center gap-2 whitespace-nowrap">
+            <i class="fas fa-info-circle text-emerald-400"></i> {{ toastMessage }}
+        </div>
+
+    </div>
+
+    <script>
+        const { createApp, ref, computed, watch, onMounted } = Vue;
+
+        // --- 1. CONFIGURAÇÃO DE CATEGORIAS ---
+        const CATEGORIES = [
+            { id: 'regional', nome: 'Regional & Típicos', cor: 'bg-amber-600', icon: 'fa-sun', ordem: 1 },
+            { id: 'hortifruti', nome: 'Hortifruti', cor: 'bg-green-600', icon: 'fa-carrot', ordem: 2 },
+            { id: 'carnes', nome: 'Açougue & Peixaria', cor: 'bg-red-600', icon: 'fa-drumstick-bite', ordem: 3 },
+            { id: 'frios', nome: 'Frios & Laticínios', cor: 'bg-yellow-500', icon: 'fa-cheese', ordem: 4 },
+            { id: 'mercearia', nome: 'Mercearia', cor: 'bg-blue-600', icon: 'fa-box-open', ordem: 5 },
+            { id: 'padaria', nome: 'Padaria', cor: 'bg-orange-500', icon: 'fa-bread-slice', ordem: 6 },
+            { id: 'bebidas', nome: 'Bebidas', cor: 'bg-purple-600', icon: 'fa-wine-bottle', ordem: 7 },
+            { id: 'limpeza', nome: 'Limpeza', cor: 'bg-teal-600', icon: 'fa-soap', ordem: 8 },
+            { id: 'higiene', nome: 'Higiene', cor: 'bg-pink-500', icon: 'fa-pump-medical', ordem: 9 },
+            { id: 'utilidades', nome: 'Utilidades', cor: 'bg-gray-600', icon: 'fa-tools', ordem: 10 },
+            { id: 'pet', nome: 'Pet Shop', cor: 'bg-indigo-600', icon: 'fa-paw', ordem: 11 },
+            { id: 'pendente', nome: 'Para Organizar', cor: 'bg-gray-400', icon: 'fa-question-circle', ordem: 0 },
+            { id: 'outros', nome: 'Outros', cor: 'bg-gray-500', icon: 'fa-asterisk', ordem: 99 }
+        ];
+
+        // --- 2. CÉREBRO LOCAL (FALLBACK OFFLINE) ---
+        // Um dicionário comprimido de palavras-chave para categorias
+        const LOCAL_KNOWLEDGE = {
+            'regional': ['jucara', 'cuxa', 'vinagreira', 'tiquira', 'guarana jesus', 'farinha dagua', 'puba', 'camarao seco', 'sururu', 'caranguejo', 'pescada amarela', 'babaçu', 'buriti', 'bacuri', 'cupuacu', 'tapereba', 'caja', 'pacoca', 'beiju', 'tapioca'],
+            'hortifruti': ['tomate', 'cebola', 'batata', 'cenoura', 'alho', 'pimentao', 'cheiro verde', 'coentro', 'alface', 'couve', 'repolho', 'banana', 'maca', 'uva', 'mamao', 'melancia', 'laranja', 'limao', 'abacaxi', 'macaxeira', 'aipim', 'mandioca', 'abobora', 'quiabo', 'maxixe', 'jilo'],
+            'carnes': ['carne', 'frango', 'peixe', 'boi', 'porco', 'bife', 'moida', 'acem', 'patinho', 'file', 'picanha', 'bisteca', 'calabresa', 'linguica', 'salsicha', 'bacon', 'figado', 'bucho', 'mocoto', 'panelada', 'rabada', 'costela', 'ovo'],
+            'frios': ['leite', 'queijo', 'presunto', 'mussarela', 'manteiga', 'margarina', 'requeijao', 'iogurte', 'danone', 'nata', 'coalhada'],
+            'mercearia': ['arroz', 'feijao', 'macarrao', 'oleo', 'azeite', 'acucar', 'sal', 'cafe', 'trigo', 'milho', 'cuscuz', 'flocao', 'biscoito', 'bolacha', 'pimenta', 'molho', 'extrato', 'maionese', 'ketchup', 'chocolate', 'nescau', 'toddy'],
+            'padaria': ['pao', 'bisnaguinha', 'bolo', 'torrada', 'sonho'],
+            'bebidas': ['agua', 'refrigerante', 'suco', 'cerveja', 'vinho', 'vodka', 'cachaca', 'soda'],
+            'limpeza': ['sabao', 'detergente', 'amaciante', 'agua sanitaria', 'candida', 'cloro', 'desinfetante', 'veja', 'bucha', 'esponja', 'bombril', 'vassoura', 'rodo', 'saco lixo'],
+            'higiene': ['papel higienico', 'sabonete', 'pasta', 'creme dental', 'shampoo', 'condicionador', 'desodorante', 'absorvente', 'fralda', 'cotonete', 'algodao'],
+            'utilidades': ['copo', 'prato', 'talher', 'lampada', 'pilha', 'papel aluminio', 'filme', 'fosforo', 'isqueiro', 'vela'],
+            'pet': ['racao', 'petisco', 'areia', 'sache']
+        };
+
+        const app = createApp({
+            setup() {
+                // Estado
+                const items = ref([]); // Lista simples: { id, nome, quantidade, categoriaId, checked }
+                const inputRaw = ref('');
+                const bulkText = ref('');
+                const isProcessing = ref(false);
+                const showSettings = ref(false);
+                const showBulkImport = ref(false);
+                const toastMessage = ref('');
+                const geminiKey = ref(localStorage.getItem('gemini_key') || '');
+
+                // --- 3. LÓGICA DE ORGANIZAÇÃO (CORE) ---
+
+                // Função de IA Local (Heurística)
+                const guessCategoryLocal = (name) => {
+                    const norm = name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+                    for (const [cat, keywords] of Object.entries(LOCAL_KNOWLEDGE)) {
+                        if (keywords.some(k => norm.includes(k))) return cat;
+                    }
+                    return 'pendente'; // Não sabe
+                };
+
+                // Função de IA Nuvem (Gemini)
+                const organizeWithGemini = async (itemsToSort) => {
+                    if (!geminiKey.value) return itemsToSort.map(i => ({ ...i, categoriaId: guessCategoryLocal(i.nome) }));
+
+                    const itemNames = itemsToSort.map(i => i.nome).join(', ');
+                    const prompt = `
+                        Classifique os itens de supermercado abaixo em um destes IDs: 
+                        [regional, hortifruti, carnes, frios, mercearia, padaria, bebidas, limpeza, higiene, utilidades, pet, outros].
+                        Priorize 'regional' para ingredientes típicos do Nordeste/Maranhão (ex: cuxá, tiquira, juçara).
+                        Retorne APENAS um JSON array válido: [{"nome": "item", "categoriaId": "id"}].
+                        Lista: ${itemNames}
+                    `;
+
+                    try {
+                        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${geminiKey.value}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                        });
+                        
+                        const data = await response.json();
+                        let text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                        
+                        // Limpeza do JSON retornado (Markdown strip)
+                        if (text.startsWith('```json')) text = text.replace(/```json|```/g, '');
+                        const classified = JSON.parse(text);
+
+                        // Merge
+                        return itemsToSort.map(i => {
+                            const found = classified.find(c => c.nome.toLowerCase() === i.nome.toLowerCase() || i.nome.toLowerCase().includes(c.nome.toLowerCase()));
+                            return { ...i, categoriaId: found ? found.categoriaId : guessCategoryLocal(i.nome) };
+                        });
+
+                    } catch (e) {
+                        console.error("Gemini Error:", e);
+                        showToast('Erro na IA. Usando modo local.');
+                        return itemsToSort.map(i => ({ ...i, categoriaId: guessCategoryLocal(i.nome) }));
+                    }
+                };
+
+                const organizeList = async () => {
+                    if (items.value.length === 0) return showToast('Lista vazia!');
+                    
+                    isProcessing.value = true;
+                    
+                    // Pega itens que estão como 'pendente' ou 'outros' para re-classificar, 
+                    // ou re-classifica tudo se o usuário quiser (aqui vamos re-classificar 'pendente' e 'outros' prioritariamente)
+                    const toSort = items.value; // Simplificando: Reorganiza tudo para garantir
+
+                    try {
+                        let sortedItems;
+                        // Se tiver chave, usa Gemini, senão Local
+                        if (geminiKey.value.length > 10) {
+                            sortedItems = await organizeWithGemini(toSort);
+                        } else {
+                            // Modo Local Simulado (delay visual para parecer "thinking")
+                            await new Promise(r => setTimeout(r, 600)); 
+                            sortedItems = toSort.map(i => ({ ...i, categoriaId: guessCategoryLocal(i.nome) }));
+                        }
+                        
+                        // Atualiza lista preservando IDs e Checked
+                        items.value = sortedItems;
+                        saveLocal();
+                        showToast('Lista Organizada! ✨');
+                    } catch (err) {
+                        showToast('Erro ao organizar.');
+                    } finally {
+                        isProcessing.value = false;
+                    }
+                };
+
+                // --- 4. AÇÕES DE LISTA ---
+
+                const quickAdd = () => {
+                    if (!inputRaw.value.trim()) return;
+                    
+                    // Parser simples de quantidade
+                    const regex = /^(\d+(?:[.,]\d+)?\s*(?:kg|g|l|ml|un|cx|pct|lt|garrafa|dz|maço)?)\s+/i;
+                    const match = inputRaw.value.match(regex);
+                    const qtd = match ? match[1].trim() : '';
+                    const nome = inputRaw.value.replace(qtd, '').trim();
+
+                    if (!nome) return;
+
+                    // Adiciona como 'pendente' para a IA organizar depois, ou tenta adivinhar localmente já
+                    const catId = guessCategoryLocal(nome); 
+
+                    items.value.push({
+                        id: crypto.randomUUID(),
+                        nome: nome.charAt(0).toUpperCase() + nome.slice(1),
+                        quantidade: qtd,
+                        categoriaId: catId, 
+                        checked: false
+                    });
+                    
+                    inputRaw.value = '';
+                    saveLocal();
+                };
+
+                const processBulkImport = () => {
+                    const lines = bulkText.value.split(/\n|,/); // Quebra por linha ou vírgula
+                    let count = 0;
+                    lines.forEach(line => {
+                        const clean = line.trim();
+                        if (clean) {
+                            items.value.push({
+                                id: crypto.randomUUID(),
+                                nome: clean,
+                                quantidade: '',
+                                categoriaId: 'pendente', // Deixa pendente para forçar o clique em "Organizar" ou adivinhar auto
+                                checked: false
+                            });
+                            count++;
+                        }
+                    });
+                    bulkText.value = '';
+                    showBulkImport.value = false;
+                    saveLocal();
+                    if(count > 0) {
+                        showToast(`${count} itens adicionados. Clique em Organizar!`);
+                        // Opcional: Auto-trigger organize
+                        // organizeList(); 
+                    }
+                };
+
+                const toggleCheck = (item) => {
+                    item.checked = !item.checked;
+                    saveLocal();
+                };
+
+                const removeItem = (id) => {
+                    items.value = items.value.filter(i => i.id !== id);
+                    saveLocal();
+                };
+
+                // --- 5. PERSISTÊNCIA ---
+                const saveLocal = () => {
+                    localStorage.setItem('smartlist_items', JSON.stringify(items.value));
+                };
+                
+                const loadLocal = () => {
+                    const saved = localStorage.getItem('smartlist_items');
+                    if (saved) items.value = JSON.parse(saved);
+                };
+
+                const saveKey = () => {
+                    localStorage.setItem('gemini_key', geminiKey.value);
+                    showToast('Chave salva!');
+                };
+
+                const resetApp = () => {
+                    if(confirm("Apagar tudo?")) {
+                        items.value = [];
+                        saveLocal();
+                    }
+                };
+
+                const clearCompleted = () => {
+                    items.value = items.value.filter(i => !i.checked);
+                    saveLocal();
+                    showSettings.value = false;
+                };
+
+                // Computed Groups
+                const groupedList = computed(() => {
+                    const groups = {};
+                    items.value.forEach(item => {
+                        const cid = item.categoriaId || 'pendente';
+                        if (!groups[cid]) {
+                            const cat = CATEGORIES.find(c => c.id === cid) || CATEGORIES.find(c=>c.id==='outros');
+                            groups[cid] = { categoryId: cid, categoryName: cat.nome, order: cat.ordem, items: [] };
+                        }
+                        groups[cid].items.push(item);
+                    });
+                    // Ordena grupos e itens
+                    Object.values(groups).forEach(g => g.items.sort((a,b) => a.checked - b.checked));
+                    return Object.values(groups).sort((a, b) => a.order - b.order);
+                });
+
+                // Helpers UI
+                const getCategoryColor = (id, bg=false) => {
+                    const c = CATEGORIES.find(x => x.id === id);
+                    return c ? (bg ? c.cor : c.cor.replace('bg-', 'text-')) : 'text-gray-500';
+                };
+                const getCategoryIcon = (id) => {
+                    const c = CATEGORIES.find(x => x.id === id);
+                    return c ? `fas ${c.icon}` : 'fas fa-circle';
+                };
+                const showToast = (msg) => {
+                    toastMessage.value = msg;
+                    setTimeout(() => toastMessage.value = '', 3000);
+                };
+                const toggleSettings = () => showSettings.value = !showSettings.value;
+
+                onMounted(() => {
+                    loadLocal();
+                });
+
+                return {
+                    inputRaw, items, groupedList, isProcessing, showSettings, showBulkImport, bulkText, geminiKey, toastMessage,
+                    quickAdd, organizeList, processBulkImport, toggleCheck, removeItem, 
+                    getCategoryColor, getCategoryIcon, toggleSettings, saveKey, clearCompleted, resetApp
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
